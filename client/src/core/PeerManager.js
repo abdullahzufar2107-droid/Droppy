@@ -1,3 +1,5 @@
+import { GroupChat } from './GroupChat.js';
+import { transfer, MAX_FILE } from './FileTransfer.js';
 // PeerManager (No.1 Network lead): mengelola semua koneksi peer + daftar peer.
 // UI tidak menyentuh WebRTC langsung; cukup memanggil method di sini dan mendengarkan event:
 //   'peers'           daftar peer berubah (status, nama, rute, latensi)
@@ -32,6 +34,7 @@ export class PeerManager extends Emitter {
     this.iceServers = iceServers;
 
     this.peers = new Map(); // id -> { id, name, alias, status, route, rtt, lastSeen, lastRead, muted, blocked }
+    this.groupOnlyPeers = new Set();
     this.conns = new Map(); // id -> PeerConnection
     this.beats = new Map(); // id -> Heartbeat
     this.retries = new Map(); // id -> jumlah percobaan reconnect
@@ -40,7 +43,21 @@ export class PeerManager extends Emitter {
 
     this.queue = new MessageQueue({
       sendRaw: (peerId, msg) => this.#sendRaw(peerId, msg),
-      onStatus: (peerId, id, status) => this.emit('message-status', { peerId, id, status }),
+      onStatus: (peerId, id, status) => {
+        if (!this.groupChat.status(id, peerId, status) && !id.includes('-invite-')) {
+          this.emit('message-status', { peerId, id, status });
+        }
+      },
+    });
+
+    this.groupChat = new GroupChat({
+      me, queue: this.queue,
+      connect: (id, groupOnly = false) => {
+        if (groupOnly && !this.peers.has(id)) this.groupOnlyPeers.add(id);
+        return this.connect(id, { silent: true });
+      },
+      getPeer: id => this.getPeer(id),
+      emit: (event, data) => this.emit(event, data),
     });
 
     signaling.on('offer', (e) => this.#onOffer(e));
@@ -57,13 +74,14 @@ export class PeerManager extends Emitter {
   setPeers(list) {
     for (const p of list) {
       if (!isValidPeerId(p.id)) continue;
+      if (p.groupOnly) this.groupOnlyPeers.add(p.id);
       this.peers.set(p.id, { ...this.#blank(p.id, p.name), ...p, status: 'offline', route: null, rtt: null });
     }
     this.emit('peers');
   }
 
   list() {
-    return [...this.peers.values()].map((p) => ({ ...p }));
+    return [...this.peers.values()].filter(p => !this.groupOnlyPeers.has(p.id)).map((p) => ({ ...p }));
   }
 
   getPeer(id) {
@@ -135,6 +153,52 @@ export class PeerManager extends Emitter {
   }
 
   // ---------------------------------------------------------------- pesan
+
+  sendFile(peerId, file, thumbnail) {
+    const conn = this.conns.get(peerId);
+    if (!conn?.isOpen || this.peers.get(peerId)?.blocked) throw new Error('Connect to the peer first.');
+    if (file.size > MAX_FILE) throw new Error('Maximum file size is 64 MiB.');
+    this.#transfer(peerId, conn.pc.createDataChannel('droppy-file', { ordered: true }), file, thumbnail);
+  }
+
+  sendGroupFile(groupId, file, thumbnail = '') {
+    const group = this.groupChat.groups.get(groupId);
+    if (!group || !group.members.includes(this.me.peerId)) throw new Error('You are no longer in this group.');
+    if (file.size > MAX_FILE) throw new Error('Maximum file size is 64 MiB.');
+    const recipients = group.members.filter(id => id !== this.me.peerId);
+    if (!recipients.length || recipients.some(id => !this.conns.get(id)?.isOpen)) {
+      throw new Error('Wait until every group member is connected before sharing a file.');
+    }
+    const messageId = newMsgId();
+    for (const peerId of recipients) {
+      this.#transfer(peerId, this.conns.get(peerId).pc.createDataChannel('droppy-file', { ordered: true }), file, thumbnail,
+        { groupId, messageId, author: this.me.name });
+    }
+  }
+
+  #fileDownloads = new Map();
+
+  downloadFile(id) {
+    return this.#fileDownloads.get(id)?.() ?? false;
+  }
+
+  #transfer(peerId, channel, file, thumbnail, context = {}) {
+    const record = { id: newMsgId(), chatId: peerId, ts: Date.now(), dir: file ? 'out' : 'in', type: 'file' };
+    context = { ...context, messageId: context.messageId || record.id };
+    transfer(channel, file, (update, download) => {
+      if (update.messageId) record.id = update.messageId;
+      if (update.groupId && !this.groupChat.groups.get(update.groupId)?.members.includes(peerId)) {
+        channel.close();
+        return;
+      }
+      if (update.groupId) record.chatId = update.groupId;
+      if (update.author) record.author = update.author;
+      if (download) this.#fileDownloads.set(record.id, download);
+      else this.#fileDownloads.delete(record.id);
+      Object.assign(record, update, { text: update.name });
+      this.emit('file-update', record);
+    }, thumbnail, context);
+  }
 
   sendChat(peerId, text) {
     const clean = String(text || '').trim().slice(0, MAX_TEXT);
@@ -233,12 +297,14 @@ export class PeerManager extends Emitter {
     let peer = this.peers.get(id);
     if (!peer) {
       peer = this.#blank(id, name);
+      peer.groupOnly = this.groupOnlyPeers.has(id);
       this.peers.set(id, peer);
       this.emit('peers');
       this.emit('peer-save', { ...peer });
     } else if (name && (peer.name.startsWith('Peer ') || peer.name !== name) && !peer.alias) {
       peer.name = name;
     }
+    if (this.groupOnlyPeers.has(id)) peer.groupOnly = true;
     return peer;
   }
 
@@ -264,6 +330,10 @@ export class PeerManager extends Emitter {
     });
     this.conns.set(peerId, conn);
 
+    conn.on('file-channel', channel => {
+      if (!conn.isOpen || this.peers.get(peerId)?.blocked) return channel.close();
+      this.#transfer(peerId, channel, null);
+    });
     conn.on('open', () => this.#onOpen(conn));
     conn.on('message', (msg) => this.#onMessage(peerId, msg));
     conn.on('closed', ({ reason, wasOpen }) => this.#handleClosed(conn, reason, wasOpen));
@@ -298,6 +368,7 @@ export class PeerManager extends Emitter {
     this.beats.set(peerId, beat);
     beat.start();
 
+    this.groupChat.peerConnected(peerId);
     this.queue.flush(peerId);
     this.emit('peer-connected', peerId);
     this.emit('peer-save', { ...this.peers.get(peerId) });
@@ -386,8 +457,13 @@ export class PeerManager extends Emitter {
         this.emit('message', { peerId, msg: record });
         break;
       }
+      case 'group-invite':
+      case 'group-chat':
+      case 'group-leave':
+        if (this.groupChat.receive(peerId, msg)) this.#send(peerId, 'ack', { id: msg.id });
+        break;
       case 'ack':
-        this.queue.ack(payload.id);
+        this.queue.ack(payload.id, peerId);
         break;
       case 'typing':
         this.emit('typing', { peerId });

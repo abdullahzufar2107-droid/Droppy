@@ -4,6 +4,7 @@ export const state = {
   signal: 'connecting', // connecting | online | offline (status koneksi ke server signaling)
   visible: true, // "Active Status": bisa ditemukan peer lain
   peers: [],
+  groups: [],
   activeId: null,
   search: '',
   messages: {}, // peerId -> [record]
@@ -29,7 +30,7 @@ export function commit() {
 
 // ---------- helper turunan ----------
 export const displayName = (p) => (p && (p.alias || p.name)) || 'Unknown';
-export const getPeer = (id) => state.peers.find((p) => p.id === id);
+export const getPeer = (id) => state.peers.find((p) => p.id === id) || state.groups.find((group) => group.id === id);
 export const chatOf = (id) => state.messages[id] || (state.messages[id] = []);
 export const lastMessage = (id) => {
   const list = state.messages[id];

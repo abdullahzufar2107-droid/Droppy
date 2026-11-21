@@ -40,7 +40,7 @@
           <span>Recent</span>
           <div class="recent__tools">
             <button class="mini-plus" data-action="add-peer" aria-label="Add peer" id="addPeerBtn"></button>
-            <button class="icon-btn icon-btn--muted" data-action="soon" aria-label="More" id="recentMore"></button>
+            <button class="icon-btn icon-btn--muted" data-action="create-group" aria-label="Create group" title="Create group" id="recentMore"></button>
           </div>
         </div>
         <div class="peer-list" id="peerList"></div>
@@ -51,9 +51,9 @@
         <header class="chat__head" id="chatHead"></header>
         <div class="messages" id="messages"></div>
         <form class="composer" id="composer" autocomplete="off">
-          <button type="button" class="icon-btn icon-btn--muted" data-action="voice-soon" aria-label="Voice note" id="composerMic"></button>
+          <button type="button" class="icon-btn icon-btn--muted" data-action="voice-record" aria-label="Record voice note" id="composerMic"></button>
           <input id="messageInput" type="text" placeholder="Type your message..." maxlength="4000" autocomplete="off" />
-          <button type="button" class="icon-btn icon-btn--muted" data-action="file-soon" aria-label="Send file" id="composerFile"></button>
+          <button type="button" class="icon-btn icon-btn--muted" data-action="pick-file" aria-label="Send file" id="composerFile"></button>
           <button type="submit" class="send-btn" aria-label="Send" id="composerSend"></button>
         </form>
       </main>
@@ -62,6 +62,12 @@
       <aside class="info" id="info"></aside>
     </div>
 
+    <dialog id="photoViewer" class="photo-viewer" aria-label="Shared photo">
+      <form method="dialog">
+        <button type="submit" aria-label="Close photo" autofocus>×</button>
+      </form>
+      <img alt="Shared photo">
+    </dialog>
     <div id="modalRoot"></div>
     <div id="toasts" aria-live="polite"></div>
 

@@ -34,7 +34,11 @@ export class PeerConnection extends Emitter {
       this.emit('state', state);
       if (state === 'failed' || state === 'closed') this.#fail(state);
     };
-    this.pc.ondatachannel = (e) => this.#bind(e.channel);
+    this.pc.ondatachannel = ({ channel }) => {
+      if (channel.label === 'droppy-file') this.emit('file-channel', channel);
+      else if (channel.label === 'droppy') this.#bind(channel);
+      else channel.close();
+    };
 
     this.timer = setTimeout(() => {
       if (!this.opened) this.#fail('timeout');
@@ -165,3 +169,4 @@ export class PeerConnection extends Emitter {
     this.emit('closed', { reason, wasOpen });
   }
 }
+

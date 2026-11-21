@@ -159,3 +159,31 @@ export function confirmModal({ title, text, confirmText = 'Confirm' }) {
     );
   });
 }
+
+export function createGroupModal({ peers, maxMembers, onCreate }) {
+  open(`
+    <button class="modal__x" data-close aria-label="Close">${icons.close}</button>
+    <h2 class="modal__title">Create group</h2>
+    <form class="group-form">
+      <label>Group name <input class="field" name="title" maxlength="48" required></label>
+      <fieldset class="group-members">
+        <legend>Choose 2–${maxMembers} peers</legend>
+        ${peers.map(peer => `<label><input type="checkbox" name="member" value="${escapeHtml(peer.id)}"> ${escapeHtml(peer.alias || peer.name)}</label>`).join('')}
+      </fieldset>
+      <p class="modal__error" hidden></p>
+      <button class="btn-primary" type="submit">Create group</button>
+    </form>`, (modal, close) => {
+    const form = modal.querySelector('form');
+    form.elements.title.focus();
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const name = data.get('title').trim();
+      const selected = data.getAll('member');
+      if (name && selected.length >= 2 && selected.length <= maxMembers && onCreate(name, selected)) return close();
+      const error = form.querySelector('.modal__error');
+      error.textContent = `Enter a group name and choose 2–${maxMembers} peers.`;
+      error.hidden = false;
+    });
+  });
+}

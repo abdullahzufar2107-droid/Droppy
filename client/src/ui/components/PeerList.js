@@ -4,6 +4,7 @@ import { displayName, lastMessage, unreadCount } from '../store.js';
 import { escapeHtml, shortAgo } from '../../utils.js';
 
 function statusLine(p) {
+  if (p.members) return `${p.members.length} members`;
   if (p.status === 'online') return p.route === 'relay' ? 'Online · via relay' : 'Online · direct';
   if (p.status === 'connecting') return 'Connecting…';
   return 'Offline';
@@ -12,14 +13,14 @@ function statusLine(p) {
 export function renderPeerList(el, s) {
   const q = s.search.trim().toLowerCase();
 
-  const items = s.peers
+  const items = [...s.peers, ...s.groups]
     .filter((p) => !q || displayName(p).toLowerCase().includes(q) || p.id.toLowerCase().includes(q))
     .map((p) => ({ p, last: lastMessage(p.id) }))
     .sort((a, b) => (b.last?.ts || b.p.lastSeen || 0) - (a.last?.ts || a.p.lastSeen || 0));
 
   if (!items.length) {
     el.innerHTML = `<div class="empty-list">${
-      s.peers.length ? 'No peers match your search.' : 'No conversations yet.<br>Press <b>+</b> to add a peer with their code.'
+      (s.peers.length || s.groups.length) ? 'No peers match your search.' : 'No conversations yet.<br>Press <b>+</b> to add a peer with their code.'
     }</div>`;
     return;
   }

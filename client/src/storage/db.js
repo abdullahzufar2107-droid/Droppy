@@ -2,15 +2,17 @@
 // Bila IndexedDB tidak tersedia (mode privat dsb.), otomatis pakai memori sementara.
 export function createDB(name) {
   let dbPromise = null;
-  const mem = { peers: new Map(), messages: new Map() };
+  const mem = { groups: new Map(), peers: new Map(), messages: new Map() };
 
   function open() {
     if (dbPromise) return dbPromise;
     dbPromise = new Promise((resolve, reject) => {
       if (!('indexedDB' in globalThis)) return reject(new Error('no indexedDB'));
-      const req = indexedDB.open(name, 1);
-      req.onupgradeneeded = () => {
+      const req = indexedDB.open(name, 2);
+      req.onupgradeneeded = ({ oldVersion }) => {
         const db = req.result;
+        db.createObjectStore('groups', { keyPath: 'id' });
+        if (oldVersion !== 0) return;
         db.createObjectStore('peers', { keyPath: 'id' });
         const msgs = db.createObjectStore('messages', { keyPath: 'id' });
         msgs.createIndex('chatId', 'chatId');
@@ -36,6 +38,18 @@ export function createDB(name) {
   const hasIDB = async () => !!(await open());
 
   return {
+    async getGroups() {
+      if (!(await hasIDB())) return [...mem.groups.values()];
+      return (await run('groups', 'readonly', (s) => s.getAll())) || [];
+    },
+    async putGroup(group) {
+      if (!(await hasIDB())) return void mem.groups.set(group.id, group);
+      await run('groups', 'readwrite', (s) => s.put(group));
+    },
+    async deleteGroup(id) {
+      if (!(await hasIDB())) return void mem.groups.delete(id);
+      await run('groups', 'readwrite', s => s.delete(id));
+    },
     async getPeers() {
       if (!(await hasIDB())) return [...mem.peers.values()];
       return (await run('peers', 'readonly', (s) => s.getAll())) || [];

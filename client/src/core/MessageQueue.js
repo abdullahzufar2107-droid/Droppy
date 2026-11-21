@@ -22,9 +22,9 @@ export class MessageQueue {
     this.#attempt(msg.id);
   }
 
-  ack(msgId) {
+  ack(msgId, peerId) {
     const e = this.pending.get(msgId);
-    if (!e) return;
+    if (!e || e.peerId !== peerId) return;
     clearTimeout(e.timer);
     this.pending.delete(msgId);
     this.onStatus(e.peerId, msgId, 'delivered');

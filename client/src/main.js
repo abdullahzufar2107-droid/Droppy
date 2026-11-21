@@ -1,3 +1,7 @@
+import { MAX_GROUP_SIZE } from './core/GroupChat.js';
+import { makeThumbnail, photoType } from './ui/photo.js';
+import { MAX_FILE } from './core/FileTransfer.js';
+import { VoiceRecorder } from './media/VoiceRecorder.js';
 // Controller: menyambungkan core (P2P) dengan UI. core/ tidak tahu apa-apa soal UI;
 // semua komunikasi lewat event PeerManager / Signaling.
 import { SIGNALING_URL, loadIceServers } from './config.js';
@@ -12,7 +16,7 @@ import { renderProfile } from './ui/components/Profile.js';
 import { renderPeerList } from './ui/components/PeerList.js';
 import { renderChatHeader, renderMessages } from './ui/components/ChatPanel.js';
 import { renderInfo } from './ui/components/InfoPanel.js';
-import { addPeerModal, confirmModal, promptModal, toast } from './ui/components/Modal.js';
+import { addPeerModal, createGroupModal, confirmModal, promptModal, toast } from './ui/components/Modal.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -26,7 +30,7 @@ $('navPhone').innerHTML = icons.phoneFilled;
 $('listBack').innerHTML = icons.chevronLeft;
 $('searchIcon').innerHTML = icons.search;
 $('addPeerBtn').innerHTML = icons.plus;
-$('recentMore').innerHTML = icons.kebab;
+$('recentMore').innerHTML = icons.users;
 $('composerMic').innerHTML = icons.mic;
 $('composerFile').innerHTML = icons.cloudUp;
 $('composerSend').innerHTML = icons.send;
@@ -40,6 +44,7 @@ const signalIdentity = { peerId: identity.peerId, name: identity.name, token: ge
 const signaling = new Signaling(SIGNALING_URL);
 const iceServers = await loadIceServers();
 const manager = new PeerManager({ me: identity, signaling, iceServers });
+const voiceRecorder = new VoiceRecorder();
 
 const announce = new Set(); // peer yang baru ditambahkan: tampilkan toast saat tersambung
 
@@ -51,6 +56,7 @@ const plainPeer = (p) => ({
   lastRead: p.lastRead,
   muted: p.muted,
   blocked: p.blocked,
+  groupOnly: p.groupOnly,
 });
 
 // ------------------------------------------------------------------ event core -> state/UI
@@ -72,14 +78,31 @@ manager.on('peer-error', ({ peerId, code }) => {
   else if (code === 'signaling-offline') toast('Not connected to the server yet.', 'error');
 });
 
+manager.on('group-save', group => {
+  state.groups = [...manager.groupChat.groups.values()];
+  db.putGroup(group);
+  commit();
+});
+manager.on('group-delivery', msg => {
+  db.putMessage(msg);
+  commit();
+});
 manager.on('message', ({ peerId, msg }) => {
+  if (msg.type === 'group' && chatOf(msg.chatId).some(existing => existing.id === msg.id)) return;
   addMessage(msg);
   db.putMessage(msg);
   if (msg.dir === 'in') {
     const peer = manager.getPeer(peerId);
-    if (state.activeId === peerId && document.visibilityState === 'visible') markRead(peerId);
+    if (state.activeId === msg.chatId && document.visibilityState === 'visible') markRead(msg.chatId);
     else if (!peer?.muted) toast(`${displayName(peer)}: ${msg.text.slice(0, 70)}`);
   }
+  commit();
+});
+
+manager.on('file-update', msg => {
+  if (!getPeer(msg.chatId)) return;
+  addMessage(msg);
+  if (!['transferring', 'offering'].includes(msg.status)) db.putMessage(msg);
   commit();
 });
 
@@ -113,20 +136,34 @@ signaling.on('id-conflict', () => {
 
 // ------------------------------------------------------------------ pulihkan data lokal
 manager.setPeers(await db.getPeers());
+for (const group of await db.getGroups()) manager.groupChat.groups.set(group.id, group);
+state.groups = [...manager.groupChat.groups.values()];
 for (const m of await db.getAllMessages()) {
-  if (!manager.getPeer(m.chatId)) continue;
+  if (!getPeer(m.chatId)) continue;
+  if (m.type === 'file' && ['available', 'waiting'].includes(m.status)) {
+    m.status = 'failed';
+    m.error = 'Transfer expired. Ask the sender to send it again.';
+  }
   addMessage(m);
-  if (m.dir === 'out' && m.status !== 'delivered') {
+  if (m.type !== 'file' && m.dir === 'out' && m.status !== 'delivered') {
     m.status = 'pending';
-    manager.requeue(m); // dikirim otomatis begitu peer tersambung
+    if (m.type === 'group') manager.groupChat.requeue(m);
+    else manager.requeue(m);
   }
 }
 state.peers = manager.list();
 
 // ------------------------------------------------------------------ aksi
 function markRead(peerId) {
-  const p = manager.getPeer(peerId);
-  if (p && unreadCount(p) > 0) manager.patchPeer(peerId, { lastRead: Date.now() });
+  const p = getPeer(peerId);
+  if (!p || !unreadCount(p)) return;
+  if (p.members) {
+    p.lastRead = Date.now();
+    db.putGroup(p);
+    commit();
+  } else {
+    manager.patchPeer(peerId, { lastRead: Date.now() });
+  }
 }
 
 function selectPeer(id, { connect = true } = {}) {
@@ -155,6 +192,13 @@ async function addPeer(raw) {
     }
     return 'Peer not found or offline. Ask them to open Droppy, then try again.';
   }
+
+  if (known?.groupOnly) {
+    known.groupOnly = false;
+    manager.groupOnlyPeers.delete(code);
+    manager.emit('peers');
+    db.putPeer(plainPeer(known));
+  }
   announce.add(code);
   manager.connect(code, { name: found.name });
   selectPeer(code, { connect: false });
@@ -171,9 +215,41 @@ function handleDeepLink() {
   addPeer(code).then((err) => err && toast(err, 'error'));
 }
 
-const activePeer = () => manager.getPeer(state.activeId);
+const activePeer = () => getPeer(state.activeId);
+
+async function sendAttachment(peerId, file) {
+  if (!file) return;
+  try {
+    const thumbnail = file.size <= MAX_FILE ? await makeThumbnail(file).catch(() => '') : '';
+    if (getPeer(peerId)?.members) manager.sendGroupFile(peerId, file, thumbnail);
+    else manager.sendFile(peerId, file, thumbnail);
+  }
+  catch (err) { toast(err.message, 'error'); }
+}
+$('chat').addEventListener('dragover', e => e.preventDefault());
+$('chat').addEventListener('drop', e => {
+  e.preventDefault();
+  for (const file of e.dataTransfer.files) sendAttachment(state.activeId, file);
+});
+
+const photoViewer = $('photoViewer');
+const viewerImage = photoViewer.querySelector('img');
+photoViewer.addEventListener('close', () => {
+  URL.revokeObjectURL(viewerImage.getAttribute('src'));
+  viewerImage.removeAttribute('src');
+});
+photoViewer.addEventListener('click', event => {
+  if (event.target === photoViewer) photoViewer.close();
+});
 
 const actions = {
+  'view-photo': el => {
+    const message = chatOf(state.activeId).find(m => m.id === el.dataset.id);
+    const mime = message && photoType(message);
+    if (!mime || photoViewer.open) return;
+    viewerImage.src = URL.createObjectURL(message.blob.slice(0, message.blob.size, mime));
+    photoViewer.showModal();
+  },
   'select-peer': (el) => selectPeer(el.dataset.id),
   back: () => {
     state.activeId = null;
@@ -247,15 +323,83 @@ const actions = {
     if (!ok) return;
     state.messages[p.id] = [];
     db.deleteMessages(p.id);
-    manager.removePeer(p.id);
+    if (p.members) {
+      manager.groupChat.groups.delete(p.id);
+      state.groups = state.groups.filter(group => group.id !== p.id);
+      await db.deleteGroup(p.id);
+    } else manager.removePeer(p.id);
     state.activeId = null;
     commit();
   },
 
-  'create-group': () => toast('Group chat is coming soon'),
+  'create-group': () => {
+    const peers = manager.list().filter(peer => !peer.blocked);
+    if (peers.length < 2) return toast('Add at least two peers before creating a group.');
+    createGroupModal({
+      peers, maxMembers: MAX_GROUP_SIZE - 1,
+      onCreate: (name, members) => {
+        const group = manager.groupChat.create(name, members);
+        if (group) selectPeer(group.id);
+        return !!group;
+      },
+    });
+  },
+  'group-leave': async () => {
+    const group = activePeer();
+    if (!group?.members) return;
+    const ok = await confirmModal({title:'Leave group?', text:`Leave ${group.name}? You will stop receiving its messages.`, confirmText:'Leave'});
+    if (!ok) return;
+    manager.groupChat.leave(group.id);
+    state.groups = [...manager.groupChat.groups.values()];
+    await db.deleteGroup(group.id);
+    state.activeId = null;
+    commit();
+  },
+  'group-delete-history': async () => {
+    const group = activePeer();
+    if (!group?.members) return;
+    const ok = await confirmModal({title:'Clear group history?', text:`Remove messages from ${group.name} on this device?`, confirmText:'Clear'});
+    if (!ok) return;
+    state.messages[group.id] = [];
+    await db.deleteMessages(group.id);
+    commit();
+  },
+  'voice-soon': () => actions['voice-record']($('composerMic')),
   'call-soon': () => toast('Voice and video calls will be added later'),
-  'voice-soon': () => toast('Voice notes are not available yet (task No.3)'),
-  'file-soon': () => toast('File sharing is not available yet (task No.3)'),
+  'voice-record': async el => {
+    try {
+      if (!voiceRecorder.recording) {
+        await voiceRecorder.start();
+        el.textContent = '■';
+        toast('Recording voice note… click again to send');
+        return;
+      }
+      const blob = await voiceRecorder.stop();
+      el.textContent = '';
+      await sendAttachment(state.activeId, new File([blob], `voice-note-${Date.now()}.webm`, {type:blob.type || 'audio/webm'}));
+    } catch (error) { el.textContent = ''; toast(error.message || 'Microphone unavailable.', 'error'); }
+  },
+  'pick-file': () => {
+    const peerId = state.activeId;
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.onchange = () => sendAttachment(peerId, picker.files[0]);
+    picker.click();
+  },
+  'download-file': el => {
+    const msg = chatOf(state.activeId).find(m => m.id === el.dataset.id);
+    if (!msg) return;
+    if (msg.status === 'available') {
+      if (!manager.downloadFile(msg.id)) toast('File is unavailable. Ask the sender to send it again.', 'error');
+      return;
+    }
+    if (!msg.blob) return;
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(msg.blob);
+    link.download = msg.name;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+  },
   soon: () => toast('Coming soon'),
 };
 
@@ -280,11 +424,14 @@ $('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = input.value.trim();
   if (!text || !state.activeId) return;
-  if (!manager.sendChat(state.activeId, text)) return void toast("Can't send to this peer.", 'error');
+  const sent = getPeer(state.activeId)?.members
+    ? manager.groupChat.send(state.activeId, text)
+    : manager.sendChat(state.activeId, text);
+  if (!sent) return void toast("Couldn't send the message.", 'error');
   input.value = '';
 });
 input.addEventListener('input', () => {
-  if (state.activeId && input.value) manager.sendTyping(state.activeId);
+  if (activePeer() && input.value) manager.sendTyping(state.activeId);
 });
 
 window.addEventListener('focus', () => state.activeId && markRead(state.activeId));
@@ -308,7 +455,10 @@ subscribe((s) => {
   $('chat').classList.toggle('is-empty', !getPeer(s.activeId));
   document.body.classList.toggle('has-chat', !!getPeer(s.activeId));
 
-  const unread = s.peers.reduce((n, p) => n + (p.id === s.activeId ? 0 : unreadCount(p)), 0);
+  $('composerFile').hidden = false;
+  $('composerMic').hidden = false;
+
+  const unread = [...s.peers, ...s.groups].reduce((n, p) => n + (p.id === s.activeId ? 0 : unreadCount(p)), 0);
   document.title = unread ? `(${unread}) Droppy` : 'Droppy';
 });
 

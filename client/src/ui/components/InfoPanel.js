@@ -1,3 +1,4 @@
+import { photoType } from '../photo.js';
 // Panel kanan: detail peer, Files, Privacy, Create Group (atau profil sendiri bila belum ada chat aktif).
 import { icons } from '../icons.js';
 import { avatarHTML, dotOf } from '../avatar.js';
@@ -17,7 +18,7 @@ function fileStats(peerId) {
   const stats = Object.fromEntries(FILE_GROUPS.map((g) => [g.key, { n: 0, bytes: 0 }]));
   for (const m of chatOf(peerId)) {
     if (m.type !== 'file') continue; // pesan file akan ditambahkan oleh FileTransfer (No.3)
-    const g = stats[m.kind] || stats.other;
+    const g = stats[(m.thumbnail || photoType(m)) ? 'image' : m.kind] || stats.other;
     g.n++;
     g.bytes += m.size || 0;
   }
@@ -45,6 +46,29 @@ export function renderInfo(el, s) {
       <button class="pill pill--wide" data-action="copy-id">${icons.copy} Copy ID</button>
       <div class="info__spacer"></div>
       <button class="pill pill--wide info__bottom" data-action="add-peer">${icons.userPlus} Add Peer</button>`;
+    return;
+  }
+
+  if (p.members) {
+    const members = p.members.map(id => ({
+      id,
+      name: id === s.me.peerId ? 'You' : p.names?.[id] || s.peers.find(peer => peer.id === id)?.name || id,
+      isSelf: id === s.me.peerId,
+    }));
+    el.innerHTML = `
+      <div class="info__avatar">${avatarHTML({ id: p.id, name: p.name, size: 80 })}</div>
+      <h2 class="info__name">${escapeHtml(p.name)}</h2>
+      <p class="info__status">${p.members.length} members</p>
+      <section class="group-members-panel" aria-label="Group members">
+        <h3>Members <span>${members.length}</span></h3>
+        <ul class="info-group-members">${members.map(member => `
+          <li>${avatarHTML({ id: member.id, name: member.name, size: 34 })}
+            <span>${escapeHtml(member.name)}</span>${member.isSelf ? '<small>You</small>' : ''}
+          </li>`).join('')}
+        </ul>
+      </section>
+      <button class="pill pill--wide" data-action="group-delete-history">Clear chat history</button>
+      <button class="pill pill--wide info__bottom" data-action="group-leave">Leave group</button>`;
     return;
   }
 
