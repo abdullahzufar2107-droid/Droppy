@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Droppy</title>
+    <meta name="theme-color" content="#2bb6c4" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 4C32 4 12 28 12 41a20 20 0 0 0 40 0C52 28 32 4 32 4z' fill='%2322c3a3'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles/main.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <!-- Rail ikon (kiri) -->
+      <nav class="rail" aria-label="Main">
+        <div class="rail__logo" id="railLogo"></div>
+        <div class="rail__nav">
+          <button class="rail__btn" data-action="soon" aria-label="Overview" id="navGrid"></button>
+          <button class="rail__btn" data-action="soon" aria-label="Discover" id="navCompass"></button>
+          <button class="rail__btn is-active" data-action="back" aria-label="Peers" id="navPeers"></button>
+          <button class="rail__btn" data-action="soon" aria-label="Network inspector" id="navChart"></button>
+          <button class="rail__btn rail__btn--red" data-action="call-soon" aria-label="Calls" id="navPhone"></button>
+        </div>
+      </nav>
+
+      <!-- Daftar chat -->
+      <section class="list" aria-label="Conversations">
+        <header class="list__head">
+          <button class="back-btn" data-action="back" aria-label="Back" id="listBack"></button>
+          <h1>Chat</h1>
+        </header>
+        <div class="profile" id="profile"></div>
+        <label class="search">
+          <input id="search" type="text" placeholder="Search" autocomplete="off" spellcheck="false" />
+          <span id="searchIcon"></span>
+        </label>
+        <div class="recent">
+          <span>Recent</span>
+          <div class="recent__tools">
+            <button class="mini-plus" data-action="add-peer" aria-label="Add peer" id="addPeerBtn"></button>
+            <button class="icon-btn icon-btn--muted" data-action="soon" aria-label="More" id="recentMore"></button>
+          </div>
+        </div>
+        <div class="peer-list" id="peerList"></div>
+      </section>
+
+      <!-- Percakapan -->
+      <main class="chat" id="chat">
+        <header class="chat__head" id="chatHead"></header>
+        <div class="messages" id="messages"></div>
+        <form class="composer" id="composer" autocomplete="off">
+          <button type="button" class="icon-btn icon-btn--muted" data-action="voice-soon" aria-label="Voice note" id="composerMic"></button>
+          <input id="messageInput" type="text" placeholder="Type your message..." maxlength="4000" autocomplete="off" />
+          <button type="button" class="icon-btn icon-btn--muted" data-action="file-soon" aria-label="Send file" id="composerFile"></button>
+          <button type="submit" class="send-btn" aria-label="Send" id="composerSend"></button>
+        </form>
+      </main>
+
+      <!-- Detail -->
+      <aside class="info" id="info"></aside>
+    </div>
+
+    <div id="modalRoot"></div>
+    <div id="toasts" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

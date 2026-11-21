@@ -1,0 +1,12 @@
+{
+  "name": "droppy",
+  "version": "0.1.0",
+  "description": "Droppy: aplikasi chat peer-to-peer berbasis WebRTC (Tugas Besar KDJK)",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  }
+}
